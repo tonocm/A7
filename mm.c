@@ -49,7 +49,7 @@ team_t team = {
  */
 int mm_init(void)
 {
-    return 0;
+  return 0;
 }
 
 /* 
@@ -58,14 +58,14 @@ int mm_init(void)
  */
 void *mm_malloc(size_t size)
 {
-    int newsize = ALIGN(size + SIZE_T_SIZE);
-    void *p = mem_sbrk(newsize);
-    if (p == (void *)-1)
-	return NULL;
-    else {
-        *(size_t *)p = size;
-        return (void *)((char *)p + SIZE_T_SIZE);
-    }
+  int newsize = ALIGN(size + SIZE_T_SIZE);
+  void *p = mem_sbrk(newsize);
+  if (p == (void *)-1)
+    return NULL;
+  else {
+    *(size_t *)p = size;
+    return (void *)((char *)p + SIZE_T_SIZE);
+  }
 }
 
 /*
@@ -80,19 +80,19 @@ void mm_free(void *ptr)
  */
 void *mm_realloc(void *ptr, size_t size)
 {
-    void *oldptr = ptr;
-    void *newptr;
-    size_t copySize;
-    
-    newptr = mm_malloc(size);
-    if (newptr == NULL)
-      return NULL;
-    copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
-    if (size < copySize)
-      copySize = size;
-    memcpy(newptr, oldptr, copySize);
-    mm_free(oldptr);
-    return newptr;
+  void *oldptr = ptr;
+  void *newptr;
+  size_t copySize;
+  
+  newptr = mm_malloc(size);
+  if (newptr == NULL)
+    return NULL;
+  copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
+  if (size < copySize)
+    copySize = size;
+  memcpy(newptr, oldptr, copySize);
+  mm_free(oldptr);
+  return newptr;
 }
 
 
