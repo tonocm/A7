@@ -41,15 +41,14 @@ team_t team = {
 /* rounds up to the nearest multiple of ALIGNMENT */
 #define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
 
-
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
-
 
 /* Global Variables*/
 static char * mem_heap; /* Ptr to first byte of the heap */
 static char * mem_brk; /* Ptr to last byte of the heap + 1 */
 static char * mem_max_addr; /* Max legal heap addr + 1 */
 static char * heap_listp;
+static char * moving_heap_listp; //jake
 
 /*Figure 9.43 from textbook (pg. 830) tips*/
 
@@ -66,7 +65,6 @@ static char * heap_listp;
 #define GET(p) (*(unsigned int *)(p))
 #define PUT(p, val) (*(unsigned int *)(p) = (val))
 
-
 /* Read the size and allocated fields from address p */
 #define GET_SIZE(p) (GET(p) & ~0x7)
 #define GET_ALLOC(p) (GET(p) & 0x1)
@@ -81,7 +79,6 @@ static char * heap_listp;
 
 /*Max Heap Size */
 #define MAX_HEAP (20*(1<<20)) /*20 MB*/
-
 
 /* coalesce and mm_free from Figure 9.46 in book. */
 
@@ -159,10 +156,33 @@ int mm_init(void)
   PUT(heap_listp + (3*WSIZE), PACK(0    , 1)); /* Epilogue header */
   heap_listp += (2*WSIZE);
 
+  moving_heap_listp = heap_listp; //jake
+
   /* Extend the empty heap with a free block of CHUNKSIZE bytes */
   if(extend_heap(CHUNKSIZE/WSIZE) == NULL)
     return -1;
   return 0;
+}
+
+/* find_fit modified from Problem 9.8 in book. */
+static void *next_find_fit(size_t asize)
+{
+  /* Next fit search */
+  void *bp;
+
+  for (bp = moving_heap_listp ; ; bp = NEXT_BLKP(bp)) {
+    if (GET_SIZE(HDRP(bp)) == 0)
+      bp = heap_listp;
+
+    if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
+      moving_heap_listp = NEXT_BLKP(bp);
+      return bp;
+    }
+
+    if (bp == PREV_BLKP(moving_heap_listp))
+      return NULL;
+  }
+  return NULL; /* No fit */
 }
 
 /* find_fit from Problem 9.8 in book. */
@@ -170,7 +190,7 @@ static void *find_fit(size_t asize)
 {
   /* First fit search */
   void *bp;
-  
+
   for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
     if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
       return bp;
@@ -209,9 +229,9 @@ void *mm_malloc(size_t size)
     return NULL;
   
   /* Adjust block size to include overhead and alignment reqs. */
-  if (size <= DSIZE)
-    asize = 2*DSIZE;
-  else
+  if (size <= DSIZE) // if size <= 8
+    asize = 2*DSIZE; // asize = 16 (header: 4, payload: 8, footer: 4)
+  else // header: 4, payload round up to 8, footer: 4)
     asize = DSIZE * ((size + (DSIZE) + (DSIZE-1)) / DSIZE);
   
   /* Search the free list for a fit */
@@ -240,10 +260,14 @@ void *mm_realloc(void *ptr, size_t size)
   newptr = mm_malloc(size);
   if (newptr == NULL)
     return NULL;
-  copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
+
+  copySize = GET_SIZE(HDRP(oldptr)) - 8; // Header is 4B and footer is 4B.
+  //  copySize = *(size_t *)((char *)oldptr SIZE_T_SIZE);
   if (size < copySize)
     copySize = size;
+
   memcpy(newptr, oldptr, copySize);
+
   mm_free(oldptr);
   return newptr;
 }
