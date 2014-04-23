@@ -59,7 +59,8 @@ static char * moving_heap_listp; //jake
 #define MAX(x,y) ((x) > (y)? (x) : (y))
 
 /* Pack a size and allocated bit into a word */
-#define PACK(size, alloc) ((size) | (alloc))
+//#define PACK(size, alloc) ((size) | (alloc))
+#define PACK(size, prev_alloc, alloc) ((size) | (prev_alloc << 1) | (alloc)) //jake
 
 /* Read and write a word at address p */
 #define GET(p) (*(unsigned int *)(p))
@@ -68,6 +69,7 @@ static char * moving_heap_listp; //jake
 /* Read the size and allocated fields from address p */
 #define GET_SIZE(p) (GET(p) & ~0x7)
 #define GET_ALLOC(p) (GET(p) & 0x1)
+#define GET_PREV_ALLOC(p) ((GET(p) & 0x2) >> 1) //jake
 
 /* Given block ptr bp, computer address of its header and footer */
 #define HDRP(bp) ((char *)(bp) - WSIZE)
@@ -84,42 +86,54 @@ static char * moving_heap_listp; //jake
 
 static void *coalesce(void *bp)
 {
-  size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
+  // Assumes that, in the end, the previous block's previous block is allocated
+  // (otherwise it already would have been coalesced).
+
+  //  size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
+  size_t prev_alloc = GET_PREV_ALLOC(HDRP(bp));
   size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
-  size_t size = GET_SIZE(HDRP(bp));
-  
+  size_t size = GET_SIZE(HDRP(bp));  
+  size_t next_blk_size; //jake
+  size_t next_blk_alloc; //jake
+
   if (prev_alloc && next_alloc) { /* Case 1 */
     return bp;
   }
   
   else if (prev_alloc && !next_alloc) { /* Case 2 */
     size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
-    PUT(HDRP(bp), PACK(size, 0));
-    PUT(FTRP(bp), PACK(size,0));
+    PUT(HDRP(bp), PACK(size, 1, 0));
+    PUT(FTRP(bp), PACK(size, 1, 0));
   }
   
   else if (!prev_alloc && next_alloc) { /* Case 3 */
     size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-    PUT(FTRP(bp), PACK(size, 0));
-    PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+    PUT(FTRP(bp), PACK(size, 1, 0));
+    PUT(HDRP(PREV_BLKP(bp)), PACK(size, 1, 0));
     bp = PREV_BLKP(bp);
   }
   
   else { /* Case 4 */
-    size += GET_SIZE(HDRP(PREV_BLKP(bp))) +
-      GET_SIZE(FTRP(NEXT_BLKP(bp)));
-    PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-    PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
+    size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
+    PUT(HDRP(PREV_BLKP(bp)), PACK(size, 1, 0));
+    PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 1, 0));
     bp = PREV_BLKP(bp);
   }
+
+  // Inform next block I'm free. //jake
+  next_blk_size = GET_SIZE(HDRP(NEXT_BLKP(bp)));
+  next_blk_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
+  PUT(HDRP(NEXT_BLKP(bp)), PACK(next_blk_size, 0, next_blk_alloc));
+
   return bp;
 }
 
 void mm_free(void *bp)
 {
   size_t size = GET_SIZE(HDRP(bp));
-  PUT(HDRP(bp), PACK(size, 0));
-  PUT(FTRP(bp), PACK(size, 0));
+  size_t prev_alloc = GET_PREV_ALLOC(HDRP(bp));
+  PUT(HDRP(bp), PACK(size, prev_alloc, 0));
+  PUT(FTRP(bp), PACK(size, prev_alloc, 0));
   coalesce(bp);
 }
 
@@ -128,6 +142,7 @@ static void *extend_heap(size_t words)
 {
   char *bp;
   size_t size;
+  size_t prev_blk_alloc;
   
   /* Allocate an even number of words to maintain alignment */
   size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
@@ -135,9 +150,10 @@ static void *extend_heap(size_t words)
     return NULL;
   
   /* Initialize free block header/footer and the epilogue header */
-  PUT(HDRP(bp), PACK(size, 0)); /* Free block header */
-  PUT(FTRP(bp), PACK(size, 0)); /* Free block footer */
-  PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1)); /* New epilogue header */
+  prev_blk_alloc = GET_PREV_ALLOC(HDRP(NEXT_BLKP(bp))); // get that from epilogue header
+  PUT(HDRP(bp), PACK(size, prev_blk_alloc, 0)); /* Free block header */
+  PUT(FTRP(bp), PACK(size, prev_blk_alloc, 0)); /* Free block footer */
+  PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 0, 1)); /* New epilogue header */ //jake
   
   /* Coalesce if the previous block was free */
   return coalesce(bp);
@@ -151,9 +167,9 @@ int mm_init(void)
   if((heap_listp = mem_sbrk(4*WSIZE)) == (void *)-1)
     return -1;
   PUT(heap_listp, 0); /* Alignment padding */
-  PUT(heap_listp + (1*WSIZE), PACK(DSIZE, 1)); /* Prologue header */
-  PUT(heap_listp + (2*WSIZE), PACK(DSIZE, 1)); /* Prologue footer */
-  PUT(heap_listp + (3*WSIZE), PACK(0    , 1)); /* Epilogue header */
+  PUT(heap_listp + (1*WSIZE), PACK(DSIZE, 1, 1)); /* Prologue header */
+  //  PUT(heap_listp + (2*WSIZE), PACK(DSIZE, 1)); /* Prologue footer */
+  PUT(heap_listp + (3*WSIZE), PACK(0, 1, 1)); /* Epilogue header */
   heap_listp += (2*WSIZE);
 
   moving_heap_listp = heap_listp; //jake
@@ -203,18 +219,26 @@ static void *find_fit(size_t asize)
 static void place(void *bp, size_t asize)
 {
   size_t csize = GET_SIZE(HDRP(bp));
+  size_t prev_alloc = GET_PREV_ALLOC(HDRP(bp));
+  size_t next_blk_size;
+  size_t next_blk_alloc;
 
   if ((csize - asize) >= (2*DSIZE)) {
-    PUT(HDRP(bp), PACK(asize, 1));    
-    PUT(FTRP(bp), PACK(asize, 1));
-    bp = NEXT_BLKP(bp);
-    PUT(HDRP(bp), PACK(csize-asize, 0));
-    PUT(FTRP(bp), PACK(csize-asize, 0));
+    PUT(HDRP(bp), PACK(asize, prev_alloc, 1));    
+    //    PUT(FTRP(bp), PACK(asize, prev_alloc, 1));
+    //    bp = NEXT_BLKP(bp);
+    PUT(HDRP(NEXT_BLKP(bp)), PACK(csize-asize, 1, 0));
+    //    PUT(FTRP(bp), PACK(csize-asize, 0));
   }
   else {
-    PUT(HDRP(bp), PACK(csize, 1));
-    PUT(FTRP(bp), PACK(csize, 1));
+    PUT(HDRP(bp), PACK(csize, prev_alloc, 1));
+    //    PUT(FTRP(bp), PACK(csize, 1));
   }
+
+  // Inform next block I'm allocated. //jake
+  next_blk_size = GET_SIZE(HDRP(NEXT_BLKP(bp)));
+  next_blk_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
+  PUT(HDRP(NEXT_BLKP(bp)), PACK(next_blk_size, 1, next_blk_alloc));
 }
 
 /* mm_malloc from Figure 9.47 in book. */
@@ -234,6 +258,13 @@ void *mm_malloc(size_t size)
   else // header: 4, payload round up to 8, footer: 4)
     asize = DSIZE * ((size + (DSIZE) + (DSIZE-1)) / DSIZE);
   
+  // Now... header: 4, payload round up to 4, 12, 20..., footer: 0
+  if (size <= WSIZE) // if size <= 4
+    asize = DSIZE;
+  else
+    asize = DSIZE * ((size - 4 + (DSIZE) + (DSIZE-1)) / DSIZE);
+
+
   /* Search the free list for a fit */
   if ((bp = find_fit(asize)) != NULL) {
     place(bp, asize);
