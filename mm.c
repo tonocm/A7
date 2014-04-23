@@ -99,7 +99,7 @@ static void *coalesce(void *bp)
   if (prev_alloc && next_alloc) { /* Case 1 */
     return bp;
   }
-  
+
   else if (prev_alloc && !next_alloc) { /* Case 2 */
     size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
     PUT(HDRP(bp), PACK(size, 1, 0));
@@ -253,16 +253,17 @@ void *mm_malloc(size_t size)
     return NULL;
   
   /* Adjust block size to include overhead and alignment reqs. */
-  if (size <= DSIZE) // if size <= 8
-    asize = 2*DSIZE; // asize = 16 (header: 4, payload: 8, footer: 4)
-  else // header: 4, payload round up to 8, footer: 4)
-    asize = DSIZE * ((size + (DSIZE) + (DSIZE-1)) / DSIZE);
+  //  if (size <= DSIZE) // if size <= 8
+  //  asize = 2*DSIZE; // asize = 16 (header: 4, payload: 8, footer: 4)
+  //  else // header: 4, payload round up to 8, footer: 4)
+  //    asize = DSIZE * ((size + (DSIZE) + (DSIZE-1)) / DSIZE);
   
   // Now... header: 4, payload round up to 4, 12, 20..., footer: 0
-  if (size <= WSIZE) // if size <= 4
-    asize = DSIZE;
-  else
-    asize = DSIZE * ((size - 4 + (DSIZE) + (DSIZE-1)) / DSIZE);
+
+  //  if (size <= WSIZE) // if size <= 4
+  //    asize = DSIZE;
+  //  else
+    asize = ALIGN(4 + size); //
 
 
   /* Search the free list for a fit */
