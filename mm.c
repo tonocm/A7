@@ -48,8 +48,6 @@ static char * mem_heap; /* Ptr to first byte of the heap */
 static char * mem_brk; /* Ptr to last byte of the heap + 1 */
 static char * mem_max_addr; /* Max legal heap addr + 1 */
 static char * heap_listp;
-//static char * moving_heap_listp; //jake
-static int num_malloc_calls;
 
 /*Figure 9.43 from textbook (pg. 830) tips*/
 
@@ -94,8 +92,6 @@ static void *coalesce(void *bp)
   size_t prev_alloc = GET_PREV_ALLOC(HDRP(bp));
   size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
   size_t size = GET_SIZE(HDRP(bp));  
-  size_t next_blk_size; //jake
-  size_t next_blk_alloc; //jake
 
   if (prev_alloc && next_alloc) { /* Case 1 */
     return bp;
@@ -121,11 +117,6 @@ static void *coalesce(void *bp)
     bp = PREV_BLKP(bp);
   }
 
-  // Inform next block I'm free. //jake
-  next_blk_size = GET_SIZE(HDRP(NEXT_BLKP(bp)));
-  next_blk_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
-  PUT(HDRP(NEXT_BLKP(bp)), PACK(next_blk_size, 0, next_blk_alloc));
-
   return bp;
 }
 
@@ -133,9 +124,19 @@ void mm_free(void *bp)
 {
   size_t size = GET_SIZE(HDRP(bp));
   size_t prev_alloc = GET_PREV_ALLOC(HDRP(bp));
+
+  size_t next_blk_size; //jake
+  size_t next_blk_alloc; //jake
+
   PUT(HDRP(bp), PACK(size, prev_alloc, 0)); // Is this necessary?
   PUT(FTRP(bp), PACK(size, prev_alloc, 0));
-  coalesce(bp);
+  
+  bp = coalesce(bp);
+
+  // Inform next block I'm free. //jake
+  next_blk_size = GET_SIZE(HDRP(NEXT_BLKP(bp)));
+  next_blk_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
+  PUT(HDRP(NEXT_BLKP(bp)), PACK(next_blk_size, 0, next_blk_alloc));
 }
 
 /* extend_heap from Figure 9.45 in book. */
@@ -149,63 +150,43 @@ static void *extend_heap(size_t words)
   size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
   if ((long)(bp = mem_sbrk(size)) == -1)
     return NULL;
-  
+
   /* Initialize free block header/footer and the epilogue header */
-  prev_blk_alloc = GET_PREV_ALLOC(HDRP(NEXT_BLKP(bp))); // get that from epilogue header
+  prev_blk_alloc = GET_PREV_ALLOC(HDRP(NEXT_BLKP(bp))); /* Get that from epilogue header. */
   PUT(HDRP(bp), PACK(size, prev_blk_alloc, 0)); /* Free block header */
   PUT(FTRP(bp), PACK(size, prev_blk_alloc, 0)); /* Free block footer */
-  PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 0, 1)); /* New epilogue header */ //jake
-  
-  /* Coalesce if the previous block was free */
-  // if (!prev_blk_alloc)
-  //   return coalesce(bp);
-  // else
-  //   return bp;
-  return coalesce(bp);
-}
+  PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 0, 1)); /* New epilogue header */
 
+  /* Coalesce if the previous block was free */
+  if (!prev_blk_alloc)
+    return coalesce(bp);
+  else
+    return bp;
+}
+  
 /* 
  * mm_init - initialize the malloc package.
  */
 int mm_init(void)
 {
-  if((heap_listp = mem_sbrk(4*WSIZE)) == (void *)-1) // May only need 2*WSIZE.
+  // I don't think we need a prologue since we have the prev_alloc bit.
+
+  size_t first_size;
+  size_t first_alloc;
+  size_t first_prev_alloc = 1;
+
+  if((heap_listp = mem_sbrk(2*WSIZE)) == (void *)-1) // May only need 2*WSIZE.
     return -1;
   PUT(heap_listp, 0); /* Alignment padding */
-  PUT(heap_listp + (1*WSIZE), PACK(DSIZE, 1, 1)); /* Prologue header */
-  //  PUT(heap_listp + (2*WSIZE), PACK(DSIZE, 1, 1)); /* Prologue footer */
+  PUT(heap_listp + (1*WSIZE), PACK(DSIZE, 1, 1)); /* Prologue header (ignore footer)*/
   PUT(heap_listp + (3*WSIZE), PACK(0, 1, 1)); /* Epilogue header */
-  heap_listp += (2*WSIZE);
-
-  //  moving_heap_listp = heap_listp; //jake
+  heap_listp += (2*WSIZE); /* Put heap_listp right after the prologue block. */
 
   /* Extend the empty heap with a free block of CHUNKSIZE bytes */
   if(extend_heap(CHUNKSIZE/WSIZE) == NULL)
     return -1;
   return 0;
 }
-
-/* find_fit modified from Problem 9.8 in book. */
-
-//static void *next_find_fit(size_t asize)
-//{
-//  /* Next fit search */
-// void *bp;
-
-//for (bp = moving_heap_listp ; ; bp = NEXT_BLKP(bp)) {
-//  if (GET_SIZE(HDRP(bp)) == 0)
-//    bp = heap_listp;
-//
-//  if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
-//    moving_heap_listp = NEXT_BLKP(bp);
-//    return bp;
-//  }
-//
-//  if (bp == PREV_BLKP(moving_heap_listp))
-//    return NULL;
-//}
-//return NULL; /* No fit */
-//}
 
 /* find_fit from Problem 9.8 in book. */
 static void *find_fit(size_t asize)
@@ -232,9 +213,11 @@ static void place(void *bp, size_t asize)
   if ((csize - asize) >= (DSIZE)) { /* If enough extra space for second block to be made: */
     PUT(HDRP(bp), PACK(asize, prev_alloc, 1)); /* Make header. */
     PUT(HDRP(NEXT_BLKP(bp)), PACK(csize-asize, 1, 0)); /* Write header of second block. */
+    PUT(FTRP(NEXT_BLKP(bp)), PACK(csize-asize, 1, 0)); /* Write footer of second block. */
   }
   else {
     PUT(HDRP(bp), PACK(csize, prev_alloc, 1)); /* Make header. */
+
     // Inform next block I'm allocated.
     next_blk_size = GET_SIZE(HDRP(NEXT_BLKP(bp))); 
     next_blk_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
@@ -245,8 +228,6 @@ static void place(void *bp, size_t asize)
 /* mm_malloc from Figure 9.47 in book. */
 void *mm_malloc(size_t size)
 {
-  num_malloc_calls++;
-  printf("Calling mm_malloc for the %d_th time.\n", num_malloc_calls);
   size_t asize; /* Adjusted block size */
   size_t extendsize; /* Amount to extend heap if no fit */
   char *bp;
@@ -321,13 +302,25 @@ void *mm_malloc(size_t size)
 }
 */
 
+/* find_fit modified from Problem 9.8 in book. */
 
+//static void *next_find_fit(size_t asize)
+//{
+//  /* Next fit search */
+// void *bp;
 
-
-
-
-
-
-
-
+//for (bp = moving_heap_listp ; ; bp = NEXT_BLKP(bp)) {
+//  if (GET_SIZE(HDRP(bp)) == 0)
+//    bp = heap_listp;
+//
+//  if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
+//    moving_heap_listp = NEXT_BLKP(bp);
+//    return bp;
+//  }
+//
+//  if (bp == PREV_BLKP(moving_heap_listp))
+//    return NULL;
+//}
+//return NULL; /* No fit */
+//}
 
