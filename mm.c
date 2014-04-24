@@ -107,8 +107,9 @@ static void *coalesce(void *bp)
   }
   
   else if (!prev_alloc && next_alloc) { /* Case 3 */
-    size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-    PUT(FTRP(bp), PACK(size, 1, 0));
+    
+    size += GET_SIZE(HDRP(PREV_BLKP(bp))); //could optimize by getting from footer
+    PUT(FTRP(bp), PACK(size, 1, 0)); //assumes previous-previous blk is allocated.
     PUT(HDRP(PREV_BLKP(bp)), PACK(size, 1, 0));
     bp = PREV_BLKP(bp);
   }
@@ -132,7 +133,7 @@ void mm_free(void *bp)
 {
   size_t size = GET_SIZE(HDRP(bp));
   size_t prev_alloc = GET_PREV_ALLOC(HDRP(bp));
-  PUT(HDRP(bp), PACK(size, prev_alloc, 0));
+  PUT(HDRP(bp), PACK(size, prev_alloc, 0)); // Is this necessary?
   PUT(FTRP(bp), PACK(size, prev_alloc, 0));
   coalesce(bp);
 }
@@ -143,7 +144,7 @@ static void *extend_heap(size_t words)
   char *bp;
   size_t size;
   size_t prev_blk_alloc;
-  
+
   /* Allocate an even number of words to maintain alignment */
   size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
   if ((long)(bp = mem_sbrk(size)) == -1)
@@ -156,6 +157,10 @@ static void *extend_heap(size_t words)
   PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 0, 1)); /* New epilogue header */ //jake
   
   /* Coalesce if the previous block was free */
+  // if (!prev_blk_alloc)
+  //   return coalesce(bp);
+  // else
+  //   return bp;
   return coalesce(bp);
 }
 
@@ -223,10 +228,10 @@ static void place(void *bp, size_t asize)
   size_t next_blk_size;
   size_t next_blk_alloc;
 
-  if ((csize - asize) >= (2*DSIZE)) {
-    PUT(HDRP(bp), PACK(asize, prev_alloc, 1));    
+  if ((csize - asize) >= (2*DSIZE)) { //maybe only needs DSIZE because that's a header...?
+    PUT(HDRP(bp), PACK(asize, prev_alloc, 1));
     //    PUT(FTRP(bp), PACK(asize, prev_alloc, 1));
-    //    bp = NEXT_BLKP(bp);
+    bp = NEXT_BLKP(bp);
     PUT(HDRP(NEXT_BLKP(bp)), PACK(csize-asize, 1, 0));
     //    PUT(FTRP(bp), PACK(csize-asize, 0));
   }
