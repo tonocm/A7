@@ -44,26 +44,52 @@ team_t team = {
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
 /* Global Variables*/
-static char * mem_heap; /* Ptr to first byte of the heap */
-static char * mem_brk; /* Ptr to last byte of the heap + 1 */
-static char * mem_max_addr; /* Max legal heap addr + 1 */
+//static char * mem_heap; /* Ptr to first byte of the heap */ Unused.
+//static char * mem_brk; /* Ptr to last byte of the heap + 1 */ Unused.
+//static char * mem_max_addr; /* Max legal heap addr + 1 */ Unused.
 static char * heap_listp;
+static char * free_list; /* Head of the free blocks linked list */
 
 /*Figure 9.43 from textbook (pg. 830) tips*/
+
+/*
+
+Abstract Representation of our structure:
+ _________________
+[__Previous Free__] <- bp - GETPREV
+[____Next Free____] <- bp - GETNEXT
+[______Header_____] <- bp - GETHDR
+[ Allocated Space ] <- bp always points here
+[                 ]
+[_________________]
+
+*Header stays as close to bp as possible for consistency when allocating the extra two segments in free blocks. However, when the block is in use, the prev and next segments can be removed.
+*/
 
 /*Basic constants and macros*/
 #define WSIZE 4 /* Word and header/footer size (bytes) */
 #define DSIZE 8 /* Double word size (bytes) */
+
+/* Antonio's Mod */
+#define GETNEXT 8 /* Distance from bp to Next Free Ptr */
+#define GETPREV 12 /* Distance from bp to Previous Free Ptr */
+#define GETHDR 4 /* Distance from bp to the Header */
+#define MIN_BLOCK_SIZE 16 /* Prev, Next, HDR, Space */ 
+
 #define CHUNKSIZE (1 << 12) /* Extend heap by this amount (bytes) */
 #define MAX(x,y) ((x) > (y)? (x) : (y))
 
 /* Pack a size and allocated bit into a word */
-//#define PACK(size, alloc) ((size) | (alloc))
 #define PACK(size, prev_alloc, alloc) ((size) | (prev_alloc << 1) | (alloc)) //jake
 
 /* Read and write a word at address p */
 #define GET(p) (*(unsigned int *)(p))
 #define PUT(p, val) (*(unsigned int *)(p) = (val))
+
+/* Antonio's Mod */
+/* Given block ptr bp, computer address of next and prev free blocks */
+#define PREV_FREE(bp) ((char *)(bp) - GETPREV)
+#define NEXT_FREE(bp) ((char *)(bp) - GETNEXT)
 
 /* Read the size and allocated fields from address p */
 #define GET_SIZE(p) (GET(p) & ~0x7)
@@ -74,12 +100,12 @@ static char * heap_listp;
 #define HDRP(bp) ((char *)(bp) - WSIZE)
 #define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
 
-/*Given block ptr bp, compute address of next and previous blocks */
+/* Given block ptr bp, compute address of next and previous blocks */
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
 
-/*Max Heap Size */
-#define MAX_HEAP (20*(1<<20)) /*20 MB*/
+/* Max Heap Size */
+#define MAX_HEAP (20*(1<<20)) /* 20 MB */
 
 /* coalesce and mm_free from Figure 9.46 in book. */
 
@@ -87,30 +113,31 @@ static void *coalesce(void *bp)
 {
   // Assumes that, in the end, the previous block's previous block is allocated
   // (otherwise it already would have been coalesced).
+  // Actually, we need to write a function that verifies that, it'll give us extra pts.
 
   //  size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
   size_t prev_alloc = GET_PREV_ALLOC(HDRP(bp));
   size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
   size_t size = GET_SIZE(HDRP(bp));  
 
-  if (prev_alloc && next_alloc) { /* Case 1 */
+  if (prev_alloc && next_alloc) { /* Case 1, blocks around are not free */
     return bp;
   }
 
-  else if (prev_alloc && !next_alloc) { /* Case 2 */
+  else if (prev_alloc && !next_alloc) { /* Case 2, only next block is free */
     size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
     PUT(HDRP(bp), PACK(size, 1, 0));
     PUT(FTRP(bp), PACK(size, 1, 0));
   }
   
-  else if (!prev_alloc && next_alloc) { /* Case 3 */
+  else if (!prev_alloc && next_alloc) { /* Case 3, only prev block is free */
     size += GET_SIZE(HDRP(PREV_BLKP(bp))); //could optimize by getting from footer
     PUT(FTRP(bp), PACK(size, 1, 0)); //assumes previous-previous blk is allocated.
     PUT(HDRP(PREV_BLKP(bp)), PACK(size, 1, 0));
     bp = PREV_BLKP(bp);
   }
   
-  else { /* Case 4 */
+  else { /* Case 4, both blocks are free */
     size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
     PUT(HDRP(PREV_BLKP(bp)), PACK(size, 1, 0));
     PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 1, 0));
@@ -171,20 +198,26 @@ int mm_init(void)
 {
   // I don't think we need a prologue since we have the prev_alloc bit.
 
-  size_t first_size;
-  size_t first_alloc;
-  size_t first_prev_alloc = 1;
+  //size_t first_size; Unused.
+  //size_t first_alloc; Unused.
+  // size_t first_prev_alloc = 1; Unused.
+  free_list = NULL; //There are no free blocks so far.
 
   if((heap_listp = mem_sbrk(2*WSIZE)) == (void *)-1) // May only need 2*WSIZE.
     return -1;
+  
   PUT(heap_listp, 0); /* Alignment padding */
   PUT(heap_listp + (1*WSIZE), PACK(DSIZE, 1, 1)); /* Prologue header (ignore footer)*/
   PUT(heap_listp + (3*WSIZE), PACK(0, 1, 1)); /* Epilogue header */
+  
+  /* Cannot Move this line anywhere else, will cause SegFault */
   heap_listp += (2*WSIZE); /* Put heap_listp right after the prologue block. */
 
   /* Extend the empty heap with a free block of CHUNKSIZE bytes */
   if(extend_heap(CHUNKSIZE/WSIZE) == NULL)
     return -1;
+
+
   return 0;
 }
 
@@ -202,6 +235,26 @@ static void *find_fit(size_t asize)
   return NULL; /* No fit */
 }
 
+/* find_fit revamped, only searches through the list of free blocks */
+static void *find_fit_free(size_t asize)
+{
+  /* First fit search */
+  void *bp;
+  
+  if(free_list == NULL) /* Can change this if we set the first "init" block to be free */
+    find_fit(asize);
+  else{
+    for (bp = free_list; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_FREE(bp)) {
+      if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
+        return bp;
+      }
+    }
+  }
+  
+  return NULL; /* No fit */  
+}
+
+
 /* place from Problem 9.9 in book. */
 static void place(void *bp, size_t asize)
 {
@@ -210,15 +263,16 @@ static void place(void *bp, size_t asize)
   size_t next_blk_size;
   size_t next_blk_alloc;
 
-  if ((csize - asize) >= (DSIZE)) { /* If enough extra space for second block to be made: */
+  if ((csize - asize) >= (MIN_BLOCK_SIZE)) { /* If enough extra space for second block to be made: */
     PUT(HDRP(bp), PACK(asize, prev_alloc, 1)); /* Make header. */
     PUT(HDRP(NEXT_BLKP(bp)), PACK(csize-asize, 1, 0)); /* Write header of second block. */
+    PUT(PREV_FREE(NEXT_BLKP(bp)), NULL); //There's nothing before the head of list, either that or last element of current list. Need to find a way to get it.
+    PUT(NEXT_FREE(NEXT_BLKP(bp)), free_list); /* Previous Head of list is now second element */
+    free_list = NEXT_BLKP(bp); /* New Head of list is block created */
     PUT(FTRP(NEXT_BLKP(bp)), PACK(csize-asize, 1, 0)); /* Write footer of second block. */
   }
-  else {
-    PUT(HDRP(bp), PACK(csize, prev_alloc, 1)); /* Make header. */
-
-    // Inform next block I'm allocated.
+  else {  /* Make Header And Inform next block I'm allocated. */
+    PUT(HDRP(bp), PACK(csize, prev_alloc, 1));
     next_blk_size = GET_SIZE(HDRP(NEXT_BLKP(bp))); 
     next_blk_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
     PUT(HDRP(NEXT_BLKP(bp)), PACK(next_blk_size, 1, next_blk_alloc));
