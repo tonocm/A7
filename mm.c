@@ -74,7 +74,8 @@ Abstract Representation of our structure:
 #define GETNEXT 8 /* Distance from bp to Next Free Ptr */
 #define GETPREV 12 /* Distance from bp to Previous Free Ptr */
 #define GETHDR 4 /* Distance from bp to the Header */
-#define MIN_BLOCK_SIZE 16 /* Prev, Next, HDR, Space */ 
+#define MIN_BLOCK_SIZE 16 /* Prev, Next, HDR, Space */
+#define NOPREV 0xffffffff /* fake address for head of the list */
 
 #define CHUNKSIZE (1 << 12) /* Extend heap by this amount (bytes) */
 #define MAX(x,y) ((x) > (y)? (x) : (y))
@@ -114,19 +115,44 @@ static void *coalesce(void *bp)
   // Assumes that, in the end, the previous block's previous block is allocated
   // (otherwise it already would have been coalesced).
   // Actually, we need to write a function that verifies that, it'll give us extra pts.
-
+ 
+  /* I need to deal with a coalescion of two adjacent blocks, one of which is the current head of the list */
+  /* There are occasional segmentation faults caused because free_list is NULL. Gotta fix that */
   //  size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
   size_t prev_alloc = GET_PREV_ALLOC(HDRP(bp));
   size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
   size_t size = GET_SIZE(HDRP(bp));  
 
   if (prev_alloc && next_alloc) { /* Case 1, blocks around are not free */
+    
+    PUT(NEXT_FREE(bp), free_list); /* Sets a new Head for the list, puts the prev head as second element. */
+    PUT(PREV_FREE(bp), NOPREV); /* There's no previous for the beginning of the list */
+    PUT(PREV_FREE(free_list), bp); /* Sets previous free from second element to Current block (First element) */
+    free_list = bp; /* Changes the head of the list to this bp */
+    
     return bp;
   }
 
   else if (prev_alloc && !next_alloc) { /* Case 2, only next block is free */
     size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
     PUT(HDRP(bp), PACK(size, 1, 0));
+    
+    if(free_list != NEXT_BLKP(bp)){  
+      PUT(NEXT_FREE(bp), free_list); /* Sets a new Head for the list, puts the prev head as second element. */
+      PUT(PREV_FREE(bp), NOPREV); /* There's no previous for the beginning of the list */
+      PUT(PREV_FREE(free_list), bp); /* Sets previous free from second element to Current block (First element) */
+      free_list = bp; /* Changes the head of the list to this bp */
+    }
+    else{
+      
+      /* The next block is the head of the list, grab info and move it down one block */
+      
+      PUT(NEXT_FREE(bp), NEXT_FREE(free_list)); /* Copy the next free block's address into the just free'd block's next  */
+      PUT(PREV_FREE(bp), NOPREV); /* Set previous to none because this block is now the head of the list  */
+      PUT(PREV_FREE(NEXT_FREE(free_list)), bp); /* Set the next's block previous address value to this block's address   */
+      free_list = bp; /* make the just free'd block the new head of free list */
+    }
+    
     PUT(FTRP(bp), PACK(size, 1, 0));
   }
   
@@ -134,16 +160,44 @@ static void *coalesce(void *bp)
     size += GET_SIZE(HDRP(PREV_BLKP(bp))); //could optimize by getting from footer
     PUT(FTRP(bp), PACK(size, 1, 0)); //assumes previous-previous blk is allocated.
     PUT(HDRP(PREV_BLKP(bp)), PACK(size, 1, 0));
+    
+     /* The prev block is the head of the list, do NOTHING :) */
+    if(free_list != PREV_BLKP(bp)){
+      PUT(NEXT_FREE(PREV_BLKP(bp)), free_list);
+      PUT(PREV_FREE(free_list), PREV_BLKP(bp));
+      PUT(PREV_FREE(PREV_BLKP(bp)), NOPREV);
+      free_list = PREV_BLKP(bp);
+      /* This piece of code can be "optimized" (better style) by moving bp = prev block to the top */
+    }
     bp = PREV_BLKP(bp);
   }
   
   else { /* Case 4, both blocks are free */
     size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
     PUT(HDRP(PREV_BLKP(bp)), PACK(size, 1, 0));
+    
+    if((free_list != PREV_BLKP(bp)) && (free_list != NEXT_BLKP(bp))) { 
+      PUT(NEXT_FREE(PREV_BLKP(bp)), free_list);
+      PUT(PREV_FREE(free_list), PREV_BLKP(bp));
+      PUT(PREV_FREE(PREV_BLKP(bp)), NOPREV);
+      free_list = PREV_BLKP(bp);
+      /* This piece of code can be "optimized" (better style) by moving bp = prev block to the top */
+    }
+    else if(free_list == NEXT_BLKP(bp)){ /* Next bp is Current head of list, handle it. */
+      
+      /* Harder than expected because previous block is already on the list */
+      
+    }
+    else { /* Previous bp is Current head of list, handle it */
+      
+       /* Harder than expected because next block is already on the list */
+      
+    }
     PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 1, 0));
+    
     bp = PREV_BLKP(bp);
   }
-
+  
   return bp;
 }
 
@@ -158,6 +212,7 @@ void mm_free(void *bp)
   PUT(HDRP(bp), PACK(size, prev_alloc, 0)); // Is this necessary?
   PUT(FTRP(bp), PACK(size, prev_alloc, 0));
   
+  /* All the free linked list bookkeeping is done inside coalesce */
   bp = coalesce(bp);
 
   // Inform next block I'm free. //jake
@@ -264,12 +319,22 @@ static void place(void *bp, size_t asize)
   size_t next_blk_alloc;
 
   if ((csize - asize) >= (MIN_BLOCK_SIZE)) { /* If enough extra space for second block to be made: */
+    
     PUT(HDRP(bp), PACK(asize, prev_alloc, 1)); /* Make header. */
+    
     PUT(HDRP(NEXT_BLKP(bp)), PACK(csize-asize, 1, 0)); /* Write header of second block. */
-    PUT(PREV_FREE(NEXT_BLKP(bp)), NULL); //There's nothing before the head of list, either that or last element of current list. Need to find a way to get it.
-    PUT(NEXT_FREE(NEXT_BLKP(bp)), free_list); /* Previous Head of list is now second element */
-    free_list = NEXT_BLKP(bp); /* New Head of list is block created */
-    PUT(FTRP(NEXT_BLKP(bp)), PACK(csize-asize, 1, 0)); /* Write footer of second block. */
+    if(free_list != NULL){ /* Needed for first execution */
+      
+      PUT(PREV_FREE(NEXT_BLKP(bp)), NOPREV); //There's nothing before the head of list... either that or last element of current list. Need to find a way to get it.
+      PUT(NEXT_FREE(NEXT_BLKP(bp)), free_list); /* Previous Head of list is now second element */
+      PUT(PREV_FREE(free_list), NEXT_BLKP(bp)); /* Sets the prev address to current free block */
+      free_list = NEXT_BLKP(bp); /* New Head of list is block created */ //Do not know if I need the GET Macro
+      PUT(FTRP(NEXT_BLKP(bp)), PACK(csize-asize, 1, 0)); /* Write footer of second block. */
+    }
+    else{
+
+      free_list = NEXT_BLKP(bp);
+    }
   }
   else {  /* Make Header And Inform next block I'm allocated. */
     PUT(HDRP(bp), PACK(csize, prev_alloc, 1));
