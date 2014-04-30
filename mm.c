@@ -48,7 +48,7 @@ team_t team = {
 //static char * mem_brk; /* Ptr to last byte of the heap + 1 */ Unused.
 //static char * mem_max_addr; /* Max legal heap addr + 1 */ Unused.
 static char * heap_listp;
-static char * free_list; /* Head of the free blocks linked list */
+static void * free_list; /* Head of the free blocks linked list */
 
 /*Figure 9.43 from textbook (pg. 830) tips*/
 
@@ -86,6 +86,7 @@ Abstract Representation of our structure:
 /* Read and write a word at address p */
 #define GET(p) (*(unsigned int *)(p))
 #define PUT(p, val) (*(unsigned int *)(p) = (val))
+#define PUTA(bp, val) (PUT(bp, (int) val)) /* Puts pointers without parsing them as unsigned ints */
 
 /* Antonio's Mod */
 /* Given block ptr bp, computer address of next and prev free blocks */
@@ -110,6 +111,25 @@ Abstract Representation of our structure:
 
 /* coalesce and mm_free from Figure 9.46 in book. */
 
+void remove_list(void *bp)
+{
+  /* Skips current block in the list of free blocks */
+  
+  if(bp != free_list){
+    PUTA(NEXT_FREE(PREV_FREE(bp)), PREV_FREE(bp));
+    PUTA(PREV_FREE(NEXT_FREE(bp)), NEXT_FREE(bp));
+  }
+  else{ /* If trying to free the head of the list */
+    
+    /* May want to check if there is any element other than the head of the list */
+    PUTA(free_list, NEXT_FREE(bp));
+    PUTA(PREV_FREE(NEXT_FREE(bp)), NOPREV);
+    
+  }
+  
+  /* May want to consider special case where freeing the last block of the list */
+}
+
 static void *coalesce(void *bp)
 {
   // Assumes that, in the end, the previous block's previous block is allocated
@@ -125,11 +145,11 @@ static void *coalesce(void *bp)
 
   if (prev_alloc && next_alloc) { /* Case 1, blocks around are not free */
     
-    PUT(NEXT_FREE(bp), free_list); /* Sets a new Head for the list, puts the prev head as second element. */
-    PUT(PREV_FREE(bp), NOPREV); /* There's no previous for the beginning of the list */
-    PUT(PREV_FREE(free_list), bp); /* Sets previous free from second element to Current block (First element) */
-    free_list = bp; /* Changes the head of the list to this bp */
-    
+    PUTA((NEXT_FREE(bp)), free_list); /* Sets a new Head for the list, puts the prev head as second element. */
+    PUTA((PREV_FREE(bp)), NOPREV); /* There's no previous for the beginning of the list */
+    PUTA((PREV_FREE(free_list)), bp); /* Sets previous free from second element to Current block (First element) */
+    PUTA(free_list, bp); /* Changes the head of the list to this bp */
+    /* free_list = bp; */
     return bp;
   }
 
@@ -138,19 +158,19 @@ static void *coalesce(void *bp)
     size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
     PUT(HDRP(bp), PACK(size, 1, 0));
     
-    PUT(NEXT_FREE(bp), NEXT_FREE(NEXT_BLKP(bp))); /* Copy the next free block's address into the just free'd block's next  */
+    PUTA(NEXT_FREE(bp), NEXT_FREE(NEXT_BLKP(bp))); /* Copy the next free block's address into the just free'd block's next  */
     
     if(NEXT_BLKP(bp) == free_list)
-      PUT(PREV_FREE(bp), NOPREV); /* Set previous to none because this block is now the head of the list  */
+      PUTA(PREV_FREE(bp), NOPREV); /* Set previous to none because this block is now the head of the list  */
     else
-      PUT(PREV_FREE(bp), PREV_FREE(NEXT_BLKP(bp)));
+      PUTA(PREV_FREE(bp), PREV_FREE(NEXT_BLKP(bp)));
     
-    PUT(PREV_FREE(NEXT_FREE(NEXT_BLKP(bp))), bp); /* Set the next's block previous address value to this block's address   */
-    PUT(NEXT_FREE(PREV_FREE(NEXT_BLKP(bp))), bp);  /* Set the previous' block next address value to this block's address   */
+    PUTA(PREV_FREE(NEXT_FREE(NEXT_BLKP(bp))), bp); /* Set the next's block previous address value to this block's address   */
+    PUTA(NEXT_FREE(PREV_FREE(NEXT_BLKP(bp))), bp);  /* Set the previous' block next address value to this block's address   */
     
     /* This means that nothing else is pointing to the "next free block", and all its previous pointers are now pointing the just freed' block */
 
-    free_list = bp; /* make the just free'd block the new head of free list */
+    PUTA(free_list, bp); /* make the just free'd block the new head of free list */
     
     PUT(FTRP(bp), PACK(size, 1, 0));
   }
@@ -172,7 +192,7 @@ static void *coalesce(void *bp)
     
     /* Previous block is still on the free list */
     
-    bp = PREV_BLKP(bp);
+    PUTA(bp, PREV_BLKP(bp));
     PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 1, 0));
   }
   
@@ -180,24 +200,24 @@ static void *coalesce(void *bp)
 }
 
 
-void remove_list(void *bp)
-{
+//void remove_list(void *bp)
+//{
   /* Skips current block in the list of free blocks */
-  
-  if(bp != free_list){
-    PUT(NEXT_FREE(PREV_FREE(bp)), PREV_FREE(bp));
-    PUT(PREV_FREE(NEXT_FREE(bp)), NEXT_FREE(bp));
-  }
-  else{ /* If trying to free the head of the list */
+//  
+//  if(bp != free_list){
+//    PUTA(NEXT_FREE(PREV_FREE(bp)), PREV_FREE(bp));
+//    PUTA(PREV_FREE(NEXT_FREE(bp)), NEXT_FREE(bp));
+//  }
+//  else{ /* If trying to free the head of the list */
     
     /* May want to check if there is any element other than the head of the list */
-    PUT(free_list, NEXT_FREE(bp));
-    PUT(PREV_FREE(NEXT_FREE(bp)), NOPREV);
-    
-  }
+//    PUTA(free_list, NEXT_FREE(bp));
+//    PUTA(PREV_FREE(NEXT_FREE(bp)), NOPREV);
+//    
+//  }
   
   /* May want to consider special case where freeing the last block of the list */
-}
+//}
 
 void mm_free(void *bp)
 {
@@ -331,15 +351,15 @@ static void place(void *bp, size_t asize)
     PUT(HDRP(NEXT_BLKP(bp)), PACK(csize-asize, 1, 0)); /* Write header of second block. */
     if(free_list != NULL){ /* Needed for first execution */
       
-      PUT(PREV_FREE(NEXT_BLKP(bp)), NOPREV); //There's nothing before the head of list... either that or last element of current list. Need to find a way to get it.
-      PUT(NEXT_FREE(NEXT_BLKP(bp)), free_list); /* Previous Head of list is now second element */
-      PUT(PREV_FREE(free_list), NEXT_BLKP(bp)); /* Sets the prev address to current free block */
-      free_list = NEXT_BLKP(bp); /* New Head of list is block created */ //Do not know if I need the GET Macro
+      PUTA(PREV_FREE(NEXT_BLKP(bp)), NOPREV); //There's nothing before the head of list... either that or last element of current list. Need to find a way to get it.
+      PUTA(NEXT_FREE(NEXT_BLKP(bp)), free_list); /* Previous Head of list is now second element */
+      PUTA(PREV_FREE(free_list), NEXT_BLKP(bp)); /* Sets the prev address to current free block */
+      PUTA(free_list, NEXT_BLKP(bp)); /* New Head of list is block created */ //Do not know if I need the GET Macro
       PUT(FTRP(NEXT_BLKP(bp)), PACK(csize-asize, 1, 0)); /* Write footer of second block. */
     }
     else{
 
-      free_list = NEXT_BLKP(bp);
+      PUTA(free_list, NEXT_BLKP(bp));
     }
   }
   else {  /* Make Header And Inform next block I'm allocated. */
@@ -390,19 +410,17 @@ void *mm_realloc(void *ptr, size_t size)
   newptr = mm_malloc(size);
   if (newptr == NULL)
     return NULL;
-
+  
   copySize = GET_SIZE(HDRP(oldptr)) - 4; // Header is 4B.
   //  copySize = *(size_t *)((char *)oldptr SIZE_T_SIZE);
   if (size < copySize)
     copySize = size;
-
+  
   memcpy(newptr, oldptr, copySize);
-
+  
   mm_free(oldptr);
   return newptr;
 }
-
-
 
 
 
