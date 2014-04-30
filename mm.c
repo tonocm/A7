@@ -134,24 +134,23 @@ static void *coalesce(void *bp)
   }
 
   else if (prev_alloc && !next_alloc) { /* Case 2, only next block is free */
+    
     size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
     PUT(HDRP(bp), PACK(size, 1, 0));
     
-    if(free_list != NEXT_BLKP(bp)){  
-      PUT(NEXT_FREE(bp), free_list); /* Sets a new Head for the list, puts the prev head as second element. */
-      PUT(PREV_FREE(bp), NOPREV); /* There's no previous for the beginning of the list */
-      PUT(PREV_FREE(free_list), bp); /* Sets previous free from second element to Current block (First element) */
-      free_list = bp; /* Changes the head of the list to this bp */
-    }
-    else{
-      
-      /* The next block is the head of the list, grab info and move it down one block */
-      
-      PUT(NEXT_FREE(bp), NEXT_FREE(free_list)); /* Copy the next free block's address into the just free'd block's next  */
+    PUT(NEXT_FREE(bp), NEXT_FREE(NEXT_BLKP(bp))); /* Copy the next free block's address into the just free'd block's next  */
+    
+    if(NEXT_BLKP(bp) == free_list)
       PUT(PREV_FREE(bp), NOPREV); /* Set previous to none because this block is now the head of the list  */
-      PUT(PREV_FREE(NEXT_FREE(free_list)), bp); /* Set the next's block previous address value to this block's address   */
-      free_list = bp; /* make the just free'd block the new head of free list */
-    }
+    else
+      PUT(PREV_FREE(bp), PREV_FREE(NEXT_BLKP(bp)));
+    
+    PUT(PREV_FREE(NEXT_FREE(NEXT_BLKP(bp))), bp); /* Set the next's block previous address value to this block's address   */
+    PUT(NEXT_FREE(PREV_FREE(NEXT_BLKP(bp))), bp);  /* Set the previous' block next address value to this block's address   */
+    
+    /* This means that nothing else is pointing to the "next free block", and all its previous pointers are now pointing the just freed' block */
+
+    free_list = bp; /* make the just free'd block the new head of free list */
     
     PUT(FTRP(bp), PACK(size, 1, 0));
   }
@@ -159,46 +158,45 @@ static void *coalesce(void *bp)
   else if (!prev_alloc && next_alloc) { /* Case 3, only prev block is free */
     size += GET_SIZE(HDRP(PREV_BLKP(bp))); //could optimize by getting from footer
     PUT(FTRP(bp), PACK(size, 1, 0)); //assumes previous-previous blk is allocated.
-    PUT(HDRP(PREV_BLKP(bp)), PACK(size, 1, 0));
+
+    /* The prev block is already on the free list, do NOTHING :) */
     
-     /* The prev block is the head of the list, do NOTHING :) */
-    if(free_list != PREV_BLKP(bp)){
-      PUT(NEXT_FREE(PREV_BLKP(bp)), free_list);
-      PUT(PREV_FREE(free_list), PREV_BLKP(bp));
-      PUT(PREV_FREE(PREV_BLKP(bp)), NOPREV);
-      free_list = PREV_BLKP(bp);
-      /* This piece of code can be "optimized" (better style) by moving bp = prev block to the top */
-    }
-    bp = PREV_BLKP(bp);
+    PUT(HDRP(PREV_BLKP(bp)), PACK(size, 1, 0));    
   }
   
   else { /* Case 4, both blocks are free */
     size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
     PUT(HDRP(PREV_BLKP(bp)), PACK(size, 1, 0));
     
-    if((free_list != PREV_BLKP(bp)) && (free_list != NEXT_BLKP(bp))) { 
-      PUT(NEXT_FREE(PREV_BLKP(bp)), free_list);
-      PUT(PREV_FREE(free_list), PREV_BLKP(bp));
-      PUT(PREV_FREE(PREV_BLKP(bp)), NOPREV);
-      free_list = PREV_BLKP(bp);
-      /* This piece of code can be "optimized" (better style) by moving bp = prev block to the top */
-    }
-    else if(free_list == NEXT_BLKP(bp)){ /* Next bp is Current head of list, handle it. */
-      
-      /* Harder than expected because previous block is already on the list */
-      
-    }
-    else { /* Previous bp is Current head of list, handle it */
-      
-       /* Harder than expected because next block is already on the list */
-      
-    }
-    PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 1, 0));
+    remove_list(NEXT_BLKP(bp)); /* Removes next block from the free list */
+    
+    /* Previous block is still on the free list */
     
     bp = PREV_BLKP(bp);
+    PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 1, 0));
   }
   
   return bp;
+}
+
+
+void remove_list(void *bp)
+{
+  /* Skips current block in the list of free blocks */
+  
+  if(bp != free_list){
+    PUT(NEXT_FREE(PREV_FREE(bp)), PREV_FREE(bp));
+    PUT(PREV_FREE(NEXT_FREE(bp)), NEXT_FREE(bp));
+  }
+  else{ /* If trying to free the head of the list */
+    
+    /* May want to check if there is any element other than the head of the list */
+    PUT(free_list, NEXT_FREE(bp));
+    PUT(PREV_FREE(NEXT_FREE(bp)), NOPREV);
+    
+  }
+  
+  /* May want to consider special case where freeing the last block of the list */
 }
 
 void mm_free(void *bp)
@@ -251,12 +249,17 @@ static void *extend_heap(size_t words)
  */
 int mm_init(void)
 {
+  /**
+     If I comment out this line I get no seg faults
+  **/
+  //free_list = NULL; //There are no free blocks so far.
+  
   // I don't think we need a prologue since we have the prev_alloc bit.
 
   //size_t first_size; Unused.
   //size_t first_alloc; Unused.
   // size_t first_prev_alloc = 1; Unused.
-  free_list = NULL; //There are no free blocks so far.
+  
 
   if((heap_listp = mem_sbrk(2*WSIZE)) == (void *)-1) // May only need 2*WSIZE.
     return -1;
@@ -300,7 +303,10 @@ static void *find_fit_free(size_t asize)
     find_fit(asize);
   else{
     for (bp = free_list; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_FREE(bp)) {
-      if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
+      if (asize <= GET_SIZE(HDRP(bp))) {
+        
+        remove_list(bp); /* Removes the block about to be allocated from the list */
+        
         return bp;
       }
     }
@@ -359,7 +365,7 @@ void *mm_malloc(size_t size)
     asize = ALIGN(4 + size);
 
   /* Search the free list for a fit */
-  if ((bp = find_fit(asize)) != NULL) {
+  if ((bp = find_fit_free(asize)) != NULL) {
     place(bp, asize);
     return bp;
   }
@@ -443,3 +449,56 @@ void *mm_malloc(size_t size)
 //return NULL; /* No fit */
 //}
 
+// if(free_list != NEXT_BLKP(bp)){ /* Remove the next block from the list, then coalesce */
+//     remove(NEXT_BLKP(bp)); /* Removes next block from the free list */
+//     PUT(NEXT_FREE(bp), free_list); /* Sets a new Head for the list, puts the prev head as second element. */
+//     PUT(PREV_FREE(bp), NOPREV); /* There's no previous for the beginning of the list */
+//     PUT(PREV_FREE(free_list), bp); /* Sets previous free from second element to Current block (First element) */
+//     free_list = bp; /* Changes the head of the list to this bp */
+//    }
+//  else{
+
+/* The next block is the head of the list, grab info and move it down one block */
+
+//  PUT(NEXT_FREE(bp), NEXT_FREE(free_list)); /* Copy the next free block's address into the just free'd block's next  */
+// PUT(PREV_FREE(bp), NOPREV); /* Set previous to none because this block is now the head of the list  */
+//  PUT(PREV_FREE(NEXT_FREE(free_list)), bp); /* Set the next's block previous address value to this block's address   */
+//  free_list = bp; /* make the just free'd block the new head of free list */
+//    }
+//    
+//    PUT(FTRP(bp), PACK(size, 1, 0));
+//
+
+/* The prev block is the head of the list, do NOTHING :) */
+//  if(free_list != PREV_BLKP(bp)){
+//  PUT(NEXT_FREE(PREV_BLKP(bp)), free_list);
+//  PUT(PREV_FREE(free_list), PREV_BLKP(bp));
+// PUT(PREV_FREE(PREV_BLKP(bp)), NOPREV);
+// free_list = PREV_BLKP(bp);
+/* This piece of code can be "optimized" (better style) by moving bp = prev block to the top */
+//  }
+//    bp = PREV_BLKP(bp);
+
+
+
+
+
+//    if((free_list != PREV_BLKP(bp)) && (free_list != NEXT_BLKP(bp))) { 
+//  PUT(NEXT_FREE(PREV_BLKP(bp)), free_list);
+//   PUT(PREV_FREE(free_list), PREV_BLKP(bp));
+//   PUT(PREV_FREE(PREV_BLKP(bp)), NOPREV);
+
+//   free_list = PREV_BLKP(bp);
+/* This piece of code can be "optimized" (better style) by moving bp = prev block to the top */
+//   }
+//  else if(free_list == NEXT_BLKP(bp)){ /* Next bp is Current head of list, handle it. */
+
+/* Harder than expected because previous block is already on the list */
+
+//   }
+//    else { /* Previous bp is Current head of list, handle it */
+
+/* Harder than expected because next block is already on the list */
+
+//  }
+//    PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 1, 0));
