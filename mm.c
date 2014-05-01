@@ -251,8 +251,6 @@ static void *extend_heap(size_t words)
  */
 int mm_init(void)
 {
-  free_list = NULL; //There are no free blocks so far.
-  
   // I don't think we need a prologue since we have the prev_alloc bit.
 
   //size_t first_size; Unused.
@@ -269,7 +267,8 @@ int mm_init(void)
   
   /* Cannot Move this line anywhere else, will cause SegFault */
   heap_listp += (2*WSIZE); /* Put heap_listp right after the prologue block. */
-
+  free_list = heap_listp; //heap_listp is the first free block.
+  
   /* Extend the empty heap with a free block of CHUNKSIZE bytes */
   if(extend_heap(CHUNKSIZE/WSIZE) == NULL)
     return -1;
@@ -359,7 +358,7 @@ void *mm_malloc(size_t size)
   char *bp;
   
   /* Ignore spurious requests */
-  if (size == 0)
+  if(size == 0)
     return NULL;
   
   /* Adjust block size to include overhead and alignment reqs. */
