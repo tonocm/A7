@@ -327,8 +327,7 @@ static void place(void *bp, size_t asize)
 
     //    if(free_listp != NULL){ /* Needed for first execution */
 
-    // Put following block at head of free list. This is broken.
-    sadfasdfads("this is broken - fix it")
+    // Put following block at head of free list. This is broken!!! <<broken>>>
     PUTP(PREV_FREE(NEXT_BLKP(bp)), NOPREV); //There's nothing before the head of list... either that or last element of current list. Need to find a way to get it.
     PUTP(NEXT_FREE(NEXT_BLKP(bp)), free_listp); /* Previous Head of list is now second element */
     PUTP(PREV_FREE(free_listp), NEXT_BLKP(bp)); /* Sets the prev address to current free block */
