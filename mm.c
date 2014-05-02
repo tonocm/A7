@@ -53,9 +53,7 @@ static char * free_listp; /* Head of the free blocks linked list */
 
 /*Figure 9.43 from textbook (pg. 830) tips*/
 
-/*
-
-Abstract Representation of our structure:
+/* Abstract Representation of our structure:
  _________________
 [______Header_____] <-- bp + HDR_OFFSET
 [__Previous Free__] <-- bp + PREV_FREE_OFFSET
@@ -75,7 +73,7 @@ Abstract Representation of our structure:
 #define NEXT_FREE_OFFSET -1*WSIZE /* Distance from bp to Next Free Ptr */
 #define PREV_FREE_OFFSET -2*WSIZE /* Distance from bp to Previous Free Ptr */
 #define HDR_OFFSET -3*WSIZE /* Distance from bp to the Header */
-#define MIN_BLOCK_SIZE 16 /* Prev, Next, HDR, Space */
+#define MIN_BLOCK_SIZE 4*WSIZE /* Prev, Next, HDR, Space */
 #define NOPREV 0 /* fake address for head of the list */
 
 #define CHUNKSIZE (1 << 12) /* Extend heap by this amount (bytes) */
@@ -114,7 +112,17 @@ Abstract Representation of our structure:
 
 /* coalesce and mm_free from Figure 9.46 in book. */
 
-void remove_list(void *bp)
+void list_add(char *bp)
+{
+  if (bp != free_listp) {
+    PUTP(PREV_FREE(free_listp), bp);
+    PUTP(NEXT_FREE(bp), free_listp);
+    PUTP(PREV_FREE(bp), 0);
+    free_listp = bp;
+  }
+}
+
+void list_remove(char *bp)
 {
   /* Skips current block in the list of free blocks */
   if(bp != free_listp){
@@ -130,7 +138,7 @@ void remove_list(void *bp)
   /* May want to consider special case where freeing the last block of the list */
 }
 
-static void *coalesce(void *bp)
+static char *coalesce(void *bp)
 {
   // Assumes that, in the end, the previous block's previous block is allocated
   // (otherwise it already would have been coalesced).
@@ -144,52 +152,32 @@ static void *coalesce(void *bp)
   size_t size = GET_SIZE(HDRP(bp));
 
   if (prev_alloc && next_alloc) { /* Case 1, blocks around are not free */
-
-    PUTP((NEXT_FREE(bp)), free_listp); /* Sets a new Head for the list, puts the prev head as second element. */
-    PUTP((PREV_FREE(bp)), NOPREV); /* There's no previous for the beginning of the list */
-    PUTP((PREV_FREE(free_listp)), bp); /* Sets previous free from second element to Current block (First element) */
-    free_listp = bp; /* Changes the head of the list to this bp */
-    /* free_list = bp; */
-    //printf("%s | %s", bp, free_list); //debugging
     return bp;
   }
 
   //here
   else if (prev_alloc && !next_alloc) { /* Case 2, only next block is free */
-
     size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
     PUT(HDRP(bp), PACK(size, 1, 0));
-    
-    PUTP(NEXT_FREE(bp), NEXT_FREE(NEXT_BLKP(bp))); /* Copy the next free block's address into the just free'd block's next  */
-    PUTP(PREV_FREE(bp), PREV_FREE(NEXT_BLKP(bp)));
-    
-    PUTP(PREV_FREE(NEXT_FREE(NEXT_BLKP(bp))), bp); /* Set the next's block previous address value to this block's address   */
-    PUTP(NEXT_FREE(PREV_FREE(NEXT_BLKP(bp))), bp);  /* Set the previous' block next address value to this block's address   */
-    
     PUT(FTRP(bp), PACK(size, 1, 0));
   }
   
   else if (!prev_alloc && next_alloc) { /* Case 3, only prev block is free */
     size += GET_SIZE(HDRP(PREV_BLKP(bp))); //could optimize by getting from footer
     PUT(FTRP(bp), PACK(size, 1, 0)); //assumes previous-previous blk is allocated.
-
-    /* The prev block is already on the free list, do NOTHING :) */
-    
-    PUT(HDRP(PREV_BLKP(bp)), PACK(size, 1, 0));    
+    PUT(HDRP(PREV_BLKP(bp)), PACK(size, 1, 0));
+    bp = PREV_BLKP(bp);
   }
   
   else { /* Case 4, both blocks are free */
     size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
     PUT(HDRP(PREV_BLKP(bp)), PACK(size, 1, 0));
-    
-    remove_list(NEXT_BLKP(bp)); /* Removes next block from the free list */
-    
-    /* Previous block is still on the free list */
-    
+    PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 1, 0));
+    list_remove(NEXT_BLKP(bp)); /* Removes next block from the free list */
+
     bp = PREV_BLKP(bp);
-    PUT(FTRP(bp), PACK(size, 1, 0));
   }
-  
+
   return bp;
 }
 
@@ -207,6 +195,7 @@ void mm_free(void *bp)
 
   /* All the free linked list bookkeeping is done inside coalesce */
   bp = coalesce(bp);
+  list_add(bp);
 
   // Inform next block I'm free. //jake
   next_blk_size = GET_SIZE(HDRP(NEXT_BLKP(bp)));
@@ -232,11 +221,10 @@ static void *extend_heap(size_t words)
   PUT(FTRP(bp), PACK(size, prev_blk_alloc, 0)); /* Free block footer */
   PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 0, 1)); /* New epilogue header */
 
-  /* Coalesce if the previous block was free */
-  if (!prev_blk_alloc)
-    return coalesce(bp);
-  else
-    return bp;
+  /* Coalesce in case the previous block was free */
+  bp = coalesce(bp);
+  list_add(bp);
+  return bp;
 }
   
 /* 
@@ -264,7 +252,6 @@ int mm_init(void)
   PUTP(heap_listp + (5*WSIZE), 0);
   free_listp = heap_listp + 6*WSIZE;
 
-  /* Cannot Move this line anywhere else, will cause SegFault */
   heap_listp += (2*WSIZE); /* Put heap_listp right after the prologue block. */
   //  free_listp = heap_listp; //heap_listp is the first free block.
   
@@ -275,18 +262,18 @@ int mm_init(void)
 }
 
 /* find_fit from Problem 9.8 in book. */
-//static void *find_fit(size_t asize)
-//{
-//  /* First fit search */
-//  void *bp;
-//
-//  for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
-//    if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
-//      return bp;
-//    }
-//  }
-//  return NULL; /* No fit */
-//}
+static void *find_fit(size_t asize)
+{
+  /* First fit search */
+  void *bp;
+
+  for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
+    if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
+      return bp;
+    }
+  }
+  return NULL; /* No fit */
+}
 
 /* find_fit revamped, only searches through the list of free blocks */
 static void *find_fit_free(size_t asize)
@@ -297,7 +284,7 @@ static void *find_fit_free(size_t asize)
   bp = free_listp;
   do {
     if (asize <= GET_SIZE(HDRP(bp))) {
-      remove_list(bp); /* Removes the block about to be allocated from the list */
+      list_remove(bp); /* Removes the block about to be allocated from the list */
       return bp;
     }
     bp = NEXT_FREE(bp);
@@ -305,8 +292,6 @@ static void *find_fit_free(size_t asize)
   
   return NULL; /* No fit */  
 }
-
-//here
 
 /* place from Problem 9.9 in book. */
 static void place(void *bp, size_t asize)
@@ -323,19 +308,19 @@ static void place(void *bp, size_t asize)
     PUT(HDRP(bp), PACK(asize, prev_alloc, 1)); /* Make header. */
     
     PUT(HDRP(NEXT_BLKP(bp)), PACK(csize-asize, 1, 0)); /* Write header of second block. */
+
+
+
+
+
+
+
+    // A segfault is being caused here because csize is really big. This might be because
+    // it is reading junk from GET_SIZE(HDRP(bp))?
+
     PUT(FTRP(NEXT_BLKP(bp)), PACK(csize-asize, 1, 0)); /* Write footer of second block. */
 
-    //    if(free_listp != NULL){ /* Needed for first execution */
-
-    // Put following block at head of free list. This is broken!!! <<broken>>>
-    PUTP(PREV_FREE(NEXT_BLKP(bp)), NOPREV); //There's nothing before the head of list... either that or last element of current list. Need to find a way to get it.
-    PUTP(NEXT_FREE(NEXT_BLKP(bp)), free_listp); /* Previous Head of list is now second element */
-    PUTP(PREV_FREE(free_listp), NEXT_BLKP(bp)); /* Sets the prev address to current free block */
-    free_listp = NEXT_BLKP(bp); /* New Head of list is block created */ //Do not know if I need the GET Macro
-      //    }
-      //    else{
-      //      free_list = NEXT_BLKP(bp);
-      //    }
+    list_add(NEXT_BLKP(bp));
   }
   else {  /* Make Header And Inform next block I'm allocated. */
     PUT(HDRP(bp), PACK(csize, prev_alloc, 1));
@@ -360,9 +345,9 @@ void *mm_malloc(size_t size)
   asize = ALIGN(4 + 4 + 4 + size); /* Prev. free, next free, hdr, (ftr if free). */
 
   /* Search the free list for a fit */
-  if ((bp = find_fit_free(asize)) != NULL) {
+  if ((bp = find_fit(asize)) != NULL) {
     place(bp, asize);
-    remove_list(bp);
+    list_remove(bp);
     return bp;
   }
   
