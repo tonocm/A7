@@ -152,12 +152,22 @@ static char *coalesce(void *bp)
   size_t size = GET_SIZE(HDRP(bp));
 
   if (prev_alloc && next_alloc) { /* Case 1, blocks around are not free */
+    list_add(bp);
     return bp;
   }
 
   //here
   else if (prev_alloc && !next_alloc) { /* Case 2, only next block is free */
     size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
+
+    PUTP(NEXT_FREE(bp), NEXT_FREE(NEXT_BLKP(bp))); /* Copy the next free block's address into the just
+                                                      free'd block's next  */
+    PUTP(PREV_FREE(bp), PREV_FREE(NEXT_BLKP(bp)));
+
+    PUTP(PREV_FREE(NEXT_FREE(NEXT_BLKP(bp))), bp); /* Set the next's block previous address value to
+                                                      this block's address   */
+    PUTP(NEXT_FREE(PREV_FREE(NEXT_BLKP(bp))), bp);  /* Set the previous' block next address value to
+                                                       this block's address   */
     PUT(HDRP(bp), PACK(size, 1, 0));
     PUT(FTRP(bp), PACK(size, 1, 0));
   }
@@ -171,9 +181,10 @@ static char *coalesce(void *bp)
   
   else { /* Case 4, both blocks are free */
     size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
+    list_remove(NEXT_BLKP(bp)); /* Removes next block from the free list */
+
     PUT(HDRP(PREV_BLKP(bp)), PACK(size, 1, 0));
     PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 1, 0));
-    list_remove(NEXT_BLKP(bp)); /* Removes next block from the free list */
 
     bp = PREV_BLKP(bp);
   }
@@ -195,7 +206,6 @@ void mm_free(void *bp)
 
   /* All the free linked list bookkeeping is done inside coalesce */
   bp = coalesce(bp);
-  list_add(bp);
 
   // Inform next block I'm free. //jake
   next_blk_size = GET_SIZE(HDRP(NEXT_BLKP(bp)));
@@ -223,7 +233,7 @@ static void *extend_heap(size_t words)
 
   /* Coalesce in case the previous block was free */
   bp = coalesce(bp);
-  list_add(bp);
+  //  list_add(bp);
   return bp;
 }
   
@@ -307,6 +317,10 @@ static void place(void *bp, size_t asize)
     
     PUT(HDRP(bp), PACK(asize, prev_alloc, 1)); /* Make header. */
     
+    char * bp1 = heap_listp;
+    for(; GET_SIZE(HDRP(bp1)) > 0; bp1 = NEXT_BLKP(bp1)) {}
+    printf("Epilogue Pointer: %08x\n", bp1);
+
     PUT(HDRP(NEXT_BLKP(bp)), PACK(csize-asize, 1, 0)); /* Write header of second block. */
 
 
@@ -389,7 +403,7 @@ int mm_check(){ /* Worth 5 Points */
   char *bp;
   int flag;
   int general; 
-  out = 1; /* If it's not modified, they're no inconsistencies (please excuse my spelling) */
+  int out = 1; /* If it's not modified, they're no inconsistencies (please excuse my spelling) */
   
   /* Check if a block is not marked as free on the free list */
   
