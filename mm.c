@@ -443,7 +443,30 @@ int mm_check(){ /* Worth 5 Points */
   if(flag != 0)
     out = 0;
 
-  //Interrupted for class council
+  /*Checking if all free blocks on the heap are actually in the free list */
+  
+  char * bp2;
+  
+  for(bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)){
+    
+    if(GET_ALLOC(bp) == 1){
+      bp2 = heap_listp;
+      
+      flag = 0;
+      do{
+        
+        if(bp2 == bp)
+          flag = 1;
+        
+        bp2 = NEXT_FREE(bp2);
+      }while((bp2 != bp) && (NEXT_FREE(bp2) != 0));
+      
+      if(flag == 0)
+        printf("Free Block %08x is not on the free list\n", bp);
+      
+    }
+    
+  }
   
   return out;
 }
