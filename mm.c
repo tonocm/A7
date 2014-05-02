@@ -384,7 +384,69 @@ void *mm_realloc(void *ptr, size_t size)
   return newptr;
 }
 
+int mm_check(){ /* Worth 5 Points */
+  
+  char *bp;
+  int flag;
+  int general; 
+  out = 1; /* If it's not modified, they're no inconsistencies (please excuse my spelling) */
+  
+  /* Check if a block is not marked as free on the free list */
+  
+  bp = free_listp; //Resetting bp to beginning of the list.
+  
+  do{
+    if(GET_ALLOC(bp) != 0){
+      if(GET_SIZE(bp) != 0){ /* If size = 0, the block is the epilogue header. Ignore */
+        printf("Error, a block on the free list with address %08x is NOT marked as free!\n", bp);
+        out = 0;
+      }
+    }   
+    bp = NEXT_FREE(bp);
+  }while(NEXT_FREE(bp) != 0);
+  
+  
+  /* Check if there are any contiguous blocks that escaped coalescing */
+  /* Assuming that the block on the free list is actually free */
+  
+  bp = free_listp; //Resetting bp to beginning of the list.
+  flag = 0;
+  
+  do{
+    if(PREV_FREE(bp) != NOPREV){
+      
+      if(GET_PREV_ALLOC(bp) == 0)
+        flag = 1; /* Failed to coalesce with prev. block */
+      
+      if(GET_ALLOC(NEXT_BLKP(bp)) == 0){
+        if(flag == 1)
+          flag = 3; /* Failed to coalesce with both blocks */
+        else
+          flag = 2; /* Failed to coalesce with next block */
+      }
+    }
+    else{
+      if(GET_ALLOC(NEXT_BLKP(bp) == 0)) /* Failed to coalesce with next block */
+         flag = 2;
+    }
+    
+    if(flag == 1)
+        printf("Failed to coalesce with previous block at address %08x.\n", bp);
+      else if(flag == 2)
+        printf("Failed to coalesce with next block at address %08x.\n", bp);
+      else if(flag == 3)
+        printf("Failed to coalesce with both adjacent blocks at address %08x.\n", bp);
+    
+    bp = NEXT_FREE(bp);
+  }while(NEXT_FREE(bp) != 0);
+  
+  if(flag != 0)
+    out = 0;
 
+  //Interrupted for class council
+  
+  return out;
+}
 
 
 
